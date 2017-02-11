@@ -53,7 +53,7 @@ impl DisplayList {
                       node: OpaqueNode,
                       client_point: &Point2D<Au>,
                       scroll_offsets: &ScrollOffsetMap)
-                      -> Option<usize> {
+                      -> Option<(usize, usize)> {
         let mut result = Vec::new();
         let mut traversal = DisplayListTraversal::new(self);
         self.text_index_contents(node,
@@ -62,7 +62,11 @@ impl DisplayList {
                                  client_point,
                                  scroll_offsets,
                                  &mut result);
-        result.pop()
+        println!("all indices = {:?}", result);
+        if let Some((i, x)) = result.iter().enumerate().find(|&(_, &r)| r.1 <= Au(0)) {
+            return Some((x.0, i));
+        }
+        return result.iter().enumerate().last().and_then(|(i, &x)| Some((x.0, i)));
     }
 
     pub fn text_index_contents<'a>(&self,
@@ -71,7 +75,7 @@ impl DisplayList {
                                    translated_point: &Point2D<Au>,
                                    client_point: &Point2D<Au>,
                                    scroll_offsets: &ScrollOffsetMap,
-                                   result: &mut Vec<usize>) {
+                                   result: &mut Vec<(usize, Au)>) {
         while let Some(item) = traversal.next() {
             match item {
                 &DisplayItem::PushStackingContext(ref stacking_context_item) => {
@@ -104,8 +108,9 @@ impl DisplayList {
                     let base = item.base();
                     if base.metadata.node == node {
                         let offset = *translated_point - text.baseline_origin;
+                        println!("offset = {:?}", offset);
                         let index = text.text_run.range_index_of_advance(&text.range, offset.x);
-                        result.push(index);
+                        result.push((index, offset.y));
                     }
                 },
                 _ => {},

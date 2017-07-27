@@ -53,6 +53,13 @@ struct ScrollOffsetLookup<'a> {
     raw_offsets: &'a ScrollOffsetMap,
 }
 
+struct TextIndexMeta {
+    index: usize,
+    offset: Au,
+    line_len: usize,
+    text_ref: *const Arc<String>,
+}
+
 impl<'a> ScrollOffsetLookup<'a> {
     fn new(parents: &'a mut HashMap<ClipId, ClipId>,
            raw_offsets: &'a ScrollOffsetMap)
@@ -131,7 +138,7 @@ impl DisplayList {
                       node: OpaqueNode,
                       client_point: &Point2D<Au>,
                       scroll_offsets: &ScrollOffsetMap)
-                      -> Option<usize> {
+                      -> Option<(usize, usize)> {
         let mut result = Vec::new();
         let mut traversal = DisplayListTraversal::new(self);
         self.text_index_contents(node,
@@ -139,7 +146,31 @@ impl DisplayList {
                                  client_point,
                                  &mut ScrollOffsetLookup::new(&mut HashMap::new(), scroll_offsets),
                                  &mut result);
-        result.pop()
+        DisplayList::find_index_and_line(&result)
+    }
+
+    fn find_index_and_line(result: &[TextIndexMeta]) -> Option<(usize, usize)> {
+        let mut line: usize = 0;
+        let mut line_len: usize = 0;
+        let mut index_and_line = None;
+        let mut state = None;
+        for r in result {
+            line_len = match state {
+                Some(ref p) if *p != r.text_ref => {
+                    line += 1;
+                    r.line_len
+                },
+                Some(_) => line_len + r.line_len,
+                None => r.line_len,
+            };
+            state = Some(r.text_ref);
+            let index = line_len - r.line_len + r.index;
+            index_and_line = Some((index, line));
+            if r.offset <= Au(0) {
+                return index_and_line;
+            }
+        }
+        index_and_line
     }
 
     fn text_index_contents<'a>(&self,
@@ -147,7 +178,7 @@ impl DisplayList {
                                traversal: &mut DisplayListTraversal<'a>,
                                point: &Point2D<Au>,
                                offset_lookup: &mut ScrollOffsetLookup,
-                               result: &mut Vec<usize>) {
+                               result: &mut Vec<TextIndexMeta>) {
         while let Some(item) = traversal.next() {
             match item {
                 &DisplayItem::PushStackingContext(ref context_item) => {
@@ -166,9 +197,18 @@ impl DisplayList {
                 &DisplayItem::Text(ref text) => {
                     let base = item.base();
                     if base.metadata.node == node {
-                        let offset = *point - text.baseline_origin;
+                        let scroll_offset = offset_lookup.full_offset_for_scroll_root(&base.scroll_root_id);
+                        let scroll_offset_vec2d = Vector2D::new(Au::from_f32_px(scroll_offset.x),
+                                                 Au::from_f32_px(scroll_offset.y));
+                        let offset = *point - scroll_offset_vec2d - text.baseline_origin;
                         let index = text.text_run.range_index_of_advance(&text.range, offset.x);
-                        result.push(index);
+                        let line_len = text.text_run.character_slices_in_range(&text.range).count();
+                        result.push(TextIndexMeta {
+                            index,
+                            offset: offset.y,
+                            line_len,
+                            text_ref: &text.text_run.text as * const Arc<String>,
+                        });
                     }
                 },
                 _ => {},
@@ -183,7 +223,7 @@ impl DisplayList {
                                        traversal: &mut DisplayListTraversal<'a>,
                                        point: &Point2D<Au>,
                                        offset_lookup: &mut ScrollOffsetLookup,
-                                       result: &mut Vec<usize>) {
+                                       result: &mut Vec<TextIndexMeta>) {
         let mut point = *point - stacking_context.bounds.origin.to_vector();
         if stacking_context.scroll_policy == ScrollPolicy::Fixed {
             let old_offset = offset_lookup.calculated_total_offsets.get(&clip_id).cloned();

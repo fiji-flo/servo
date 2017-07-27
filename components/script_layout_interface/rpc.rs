@@ -95,4 +95,4 @@ impl MarginStyleResponse {
 }
 
 #[derive(Clone)]
-pub struct TextIndexResponse(pub Option<usize>);
+pub struct TextIndexResponse(pub Option<(usize, usize)>);

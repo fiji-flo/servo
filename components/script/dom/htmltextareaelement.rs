@@ -7,7 +7,9 @@ use dom::bindings::cell::DOMRefCell;
 use dom::bindings::codegen::Bindings::EventBinding::EventMethods;
 use dom::bindings::codegen::Bindings::HTMLTextAreaElementBinding;
 use dom::bindings::codegen::Bindings::HTMLTextAreaElementBinding::HTMLTextAreaElementMethods;
+use dom::bindings::codegen::Bindings::MouseEventBinding::MouseEventMethods;
 use dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
+use dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
 use dom::bindings::inheritance::Castable;
 use dom::bindings::js::{LayoutJS, MutNullableJS, Root};
 use dom::bindings::str::DOMString;
@@ -20,6 +22,7 @@ use dom::htmlelement::HTMLElement;
 use dom::htmlfieldsetelement::HTMLFieldSetElement;
 use dom::htmlformelement::{FormControl, HTMLFormElement};
 use dom::keyboardevent::KeyboardEvent;
+use dom::mouseevent::MouseEvent;
 use dom::node::{ChildrenMutation, Node, NodeDamage, UnbindContext};
 use dom::node::{document_from_node, window_from_node};
 use dom::nodelist::NodeList;
@@ -28,6 +31,7 @@ use dom::virtualmethods::VirtualMethods;
 use dom_struct::dom_struct;
 use html5ever::{LocalName, Prefix};
 use ipc_channel::ipc::IpcSender;
+use script_layout_interface::rpc::TextIndexResponse;
 use script_traits::ScriptMsg as ConstellationMsg;
 use std::cell::Cell;
 use std::default::Default;
@@ -400,6 +404,31 @@ impl VirtualMethods for HTMLTextAreaElement {
             //TODO: set the editing position for text inputs
 
             document_from_node(self).request_focus(self.upcast());
+            if !self.textinput.borrow().is_empty() {
+                if let Some(mouse_event) = event.downcast::<MouseEvent>() {
+                    // dispatch_key_event (document.rs) triggers a click event when releasing
+                    // the space key. There's no nice way to catch this so let's use this for
+                    // now.
+                    if !(mouse_event.ScreenX() == 0 && mouse_event.ScreenY() == 0 &&
+                         mouse_event.GetRelatedTarget().is_none()) {
+                        let window = window_from_node(self);
+                        let translated_x = mouse_event.ClientX() + window.PageXOffset();
+                        let translated_y = mouse_event.ClientY() + window.PageYOffset();
+                        let TextIndexResponse(index) = window.text_index_query(
+                            self.upcast::<Node>().to_trusted_node_address(),
+                            translated_x,
+                            translated_y
+                        );
+                        if let Some((i, l)) = index {
+                            self.textinput.borrow_mut().edit_point.index = i;
+                            self.textinput.borrow_mut().edit_point.line = l;
+                            // trigger redraw
+                            self.upcast::<Node>().dirty(NodeDamage::OtherNodeDamage);
+                            event.PreventDefault();
+                        }
+                    }
+                }
+            }
         } else if event.type_() == atom!("keydown") && !event.DefaultPrevented() {
             if let Some(kevent) = event.downcast::<KeyboardEvent>() {
                 // This can't be inlined, as holding on to textinput.borrow_mut()
